@@ -10,28 +10,59 @@
             font-family: Arial, sans-serif;
             margin: 20px;
             background-color: #f4f4f4;
+            text-align: center;
+        }
+
+        #container {
+            max-width: 600px;
+            margin: auto;
+            background: #fff;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0px 0px 15px rgba(0, 0, 0, 0.1);
+        }
+
+        h2 {
+            color: #333;
         }
 
         #booking-form {
             margin-bottom: 20px;
-            background: #fff;
-            padding: 15px;
+        }
+
+        input,
+        button {
+            padding: 10px;
+            margin: 5px;
+            width: 80%;
             border-radius: 5px;
-            box-shadow: 0px 0px 10px rgba(0, 0, 0, 0.1);
+            border: 1px solid #ccc;
+        }
+
+        button {
+            background-color: #28a745;
+            color: white;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background-color: #218838;
         }
 
         .slot {
             padding: 10px;
             border: 1px solid #ccc;
             margin: 5px;
-            cursor: pointer;
             border-radius: 5px;
             text-align: center;
+            cursor: pointer;
+            transition: background 0.3s;
         }
 
         .booked {
             background-color: #f8d7da;
             color: #721c24;
+            cursor: not-allowed;
         }
 
         .available {
@@ -52,37 +83,47 @@
             border: 1px solid #ccc;
             border-radius: 5px;
             box-shadow: 0px 0px 10px rgba(0, 0, 0, 0.1);
+            text-align: left;
+        }
+
+        p {
+            margin: 5px 0;
         }
     </style>
 </head>
 
 <body>
-    <h2>OS-Based Booking System</h2>
+    <div id="container">
+        <h2>OS-Based Booking System</h2>
 
-    <form id="booking-form">
-        <label for="name">Name:</label>
-        <input type="text" id="name" required>
-        <button type="submit">Book Slot</button>
-    </form>
+        <form id="booking-form">
+            <label for="name">Enter Name:</label>
+            <input type="text" id="name" required placeholder="Your Name">
+            <button type="submit">Book Slot</button>
+        </form>
 
-    <h3>Available Rooms</h3>
-    <div id="rooms"></div>
+        <h3>Available Rooms</h3>
+        <div id="rooms"></div>
 
-    <h3>Process Queue</h3>
-    <div id="queue">Queue: None</div>
+        <h3>Process Queue (Round-Robin Scheduling)</h3>
+        <div id="queue">Queue: None</div>
 
-    <h3>Logs</h3>
-    <div id="logs">Logs will appear here...</div>
+        <h3>Logs</h3>
+        <div id="logs">Logs will appear here...</div>
+    </div>
 
     <script>
-        const API_URL = 'http://192.168.52.159:8000/api/rooms/';
+        const API_URL = 'http://192.168.56.1:8000/api/rooms/';
+        const BOOKING_URL = 'http://192.168.56.1:8000/api/bookings/create/';
         let queue = [];
         let processing = false;
-        const TIME_SLICE = 2000;
+        const TIME_SLICE = 2000; // Round-Robin Time Slice (2 seconds)
+        let semaphore = 1; // Binary Semaphore (1 = available, 0 = locked)
 
         async function fetchRooms() {
             try {
                 const response = await fetch(API_URL);
+                if (!response.ok) throw new Error('Failed to fetch rooms');
                 const rooms = await response.json();
                 displayRooms(rooms);
             } catch (error) {
@@ -93,18 +134,37 @@
         function displayRooms(rooms) {
             const container = document.getElementById('rooms');
             container.innerHTML = '';
+
             rooms.forEach(room => {
                 const div = document.createElement('div');
                 div.classList.add('slot', room.available_slots > 0 ? 'available' : 'booked');
-                div.textContent = `${room.name} - Available Slots: ${room.available_slots}`;
-                if (room.available_slots > 0) div.onclick = () => addToQueue(room.id);
+                div.textContent = `${room.name} - Slots: ${room.available_slots}`;
+
+                if (room.available_slots > 0) {
+                    div.onclick = () => addToQueue(room.id);
+                }
+
                 container.appendChild(div);
             });
         }
 
+        document.getElementById('booking-form').addEventListener('submit', function (event) {
+            event.preventDefault();
+            const name = document.getElementById('name').value.trim();
+            if (!name) {
+                alert('Please enter your name');
+                return;
+            }
+            updateLogs(`User ${name} is ready to book.`);
+        });
+
         function addToQueue(roomId) {
-            const name = document.getElementById('name').value;
-            if (!name) return alert('Please enter your name');
+            const name = document.getElementById('name').value.trim();
+            if (!name) {
+                alert('Please enter your name first.');
+                return;
+            }
+
             queue.push({ roomId, name });
             updateQueueDisplay();
             processQueue();
@@ -116,18 +176,34 @@
 
         async function processQueue() {
             if (processing || queue.length === 0) return;
+            if (semaphore === 0) {
+                updateLogs("System is busy... waiting");
+                setTimeout(processQueue, TIME_SLICE);
+                return;
+            }
+
+            semaphore = 0; // Lock the resource
             processing = true;
 
             const { roomId, name } = queue.shift();
             updateQueueDisplay();
+            updateLogs(`Processing booking for ${name}...`);
 
             setTimeout(async () => {
-                await fetch('http://192.168.52.159:8000/api/make_booking/', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ room_id: roomId, user_name: name })
-                });
+                try {
+                    const response = await fetch(BOOKING_URL, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ room_id: roomId, user_name: name })
+                    });
 
+                    if (!response.ok) throw new Error('Booking failed');
+                    updateLogs(`✅ Booking confirmed for ${name}.`);
+                } catch (error) {
+                    updateLogs(`❌ Error processing ${name}: ${error.message}`);
+                }
+
+                semaphore = 1; // Release the resource
                 processing = false;
                 fetchRooms();
                 processQueue();
@@ -135,9 +211,13 @@
         }
 
         function updateLogs(message) {
-            document.getElementById('logs').innerHTML += `<p>${new Date().toLocaleTimeString()}: ${message}</p>`;
+            const logsContainer = document.getElementById('logs');
+            const logEntry = document.createElement('p');
+            logEntry.innerHTML = `<strong>${new Date().toLocaleTimeString()}:</strong> ${message}`;
+            logsContainer.appendChild(logEntry);
         }
 
+        setInterval(fetchRooms, 5000);
         fetchRooms();
     </script>
 </body>

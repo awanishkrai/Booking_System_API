@@ -4,15 +4,34 @@ from datetime import datetime
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.decorators import api_view
+from django.urls import path
 from .models import Room, Booking
 from .serializers import RoomSerializer, BookingSerializer
-from django.db import transaction
+from django.db import transaction, IntegrityError
 
-# Mutex lock to prevent race conditions
-room_lock = threading.Lock()
+# OS Simulation Components
+process_queue = queue.Queue()
+processes = {}
+mutex = threading.Lock()
+semaphore = threading.Semaphore(2)  # Max 2 processes in critical section
+pid_counter = 1
+semaphore_lock = threading.Lock()
+room_semaphores = {}
 
-# Queue for fair scheduling of booking requests
-booking_queue = queue.Queue()
+def generate_pid():
+    global pid_counter
+    with mutex:
+        pid_counter += 1
+        return pid_counter
+
+def fcfs_scheduling():
+    try:
+        if not process_queue.empty():
+            process = process_queue.get_nowait()  # Use get_nowait to avoid blocking
+            process["status"] = "Completed"
+            return process
+    except queue.Empty:
+        return None
 
 @api_view(['GET'])
 def room_list(request):
@@ -22,57 +41,79 @@ def room_list(request):
 
 @api_view(['GET'])
 def booking_list(request, room_id):
-    bookings = Booking.objects.filter(room_id=room_id)
-    serializer = BookingSerializer(bookings, many=True)
-    return Response(serializer.data)
+    try:
+        bookings = Booking.objects.filter(room_id=room_id)
+        serializer = BookingSerializer(bookings, many=True)
+        return Response(serializer.data)
+    except Room.DoesNotExist:
+        return Response({"error": "Room not found"}, status=status.HTTP_404_NOT_FOUND)
 
+@api_view(['POST'])
+def create_process(request):
+    pid = generate_pid()
+    process = {
+        "pid": pid,
+        "name": f"Process-{pid}",
+        "priority": 1,
+        "status": "Queued"
+    }
+    processes[pid] = process
+    process_queue.put(process)
+    return Response({"message": "Process created", "process": process})
 
-# Create a dictionary to hold semaphores for each room
-room_semaphores = {}
+@api_view(['GET'])
+def list_processes(request):
+    return Response({"processes": list(processes.values())})
 
 @api_view(['POST'])
 def make_booking(request):
     room_id = request.data.get('room_id')
     user_name = request.data.get('user_name')
+    semaphore_acquired = False
 
     try:
-        # Get the room object
-        room = Room.objects.get(id=room_id)
-        
-        # Initialize the semaphore for the room if it does not exist
-        if room_id not in room_semaphores:
-            room_semaphores[room_id] = threading.Semaphore(room.available_slots)
+        with semaphore_lock:
+            if room_id not in room_semaphores:
+                room = Room.objects.get(id=room_id)
+                room_semaphores[room_id] = threading.Semaphore(room.available_slots)
 
-        # Try to acquire the semaphore (this is the atomic part)
-        if room_semaphores[room_id].acquire(blocking=False):
-            # Start a database transaction to make it atomic
-            with transaction.atomic():
-                # Lock the room row to prevent race conditions
-                room = Room.objects.select_for_update().get(id=room_id)
+        with transaction.atomic():
+            room = Room.objects.select_for_update().get(id=room_id)
 
-                # Check if the room has available slots
-                if room.available_slots <= 0:
-                    room_semaphores[room_id].release()  # Release semaphore if booking fails
-                    return Response({"error": "Room is fully booked"}, status=status.HTTP_400_BAD_REQUEST)
+            if room.available_slots <= 0:
+                return Response({"error": "Room is fully booked"}, status=status.HTTP_400_BAD_REQUEST)
 
-                # Create the booking
-                booking = Booking.objects.create(room=room, user_name=user_name)
+            if not room_semaphores[room_id].acquire(blocking=False):
+                return Response({"error": "No slots available, please try again later."}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+            
+            semaphore_acquired = True
 
-                # Decrease the available slots
-                room.available_slots -= 1
-                room.save()
+            booking = Booking.objects.create(room=room, user_name=user_name)
+            room.available_slots -= 1
+            room.save()
 
-                # Release the semaphore (free the resource)
-                room_semaphores[room_id].release()
-
-                return Response({
-                    "message": "Booking successful",
-                    "room": room.name,
-                    "user_name": user_name
-                }, status=status.HTTP_201_CREATED)
-        
-        else:
-            return Response({"error": "No slots available, please try again later."}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+            return Response({
+                "message": "Booking successful",
+                "room": room.name,
+                "user_name": user_name
+            }, status=status.HTTP_201_CREATED)
 
     except Room.DoesNotExist:
         return Response({"error": "Room not found"}, status=status.HTTP_404_NOT_FOUND)
+
+    except IntegrityError:
+        return Response({"error": "Database integrity error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    except Exception as e:
+        return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    finally:
+        if semaphore_acquired and room_id in room_semaphores:
+            room_semaphores[room_id].release()
+
+@api_view(['GET'])
+def schedule_process_fcfs(request):
+    process = fcfs_scheduling()
+    if process:
+        return Response({"message": "FCFS executed", "process": process})
+    return Response({"error": "No processes in queue"}, status=status.HTTP_400_BAD_REQUEST)
