@@ -7,87 +7,151 @@
     <title>OS-Based Booking System</title>
     <style>
         body {
-            font-family: Arial, sans-serif;
-            margin: 20px;
-            background-color: #f4f4f4;
-            text-align: center;
+            font-family: 'Helvetica Neue', Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background: linear-gradient(135deg, #1e3c72, #2a5298);
+            color: #fff;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
         }
 
         #container {
-            max-width: 600px;
-            margin: auto;
-            background: #fff;
-            padding: 20px;
-            border-radius: 10px;
-            box-shadow: 0px 0px 15px rgba(0, 0, 0, 0.1);
+            max-width: 900px;
+            width: 100%;
+            background-color: rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 40px;
+            box-shadow: 0 4px 30px rgba(0, 0, 0, 0.1);
+            text-align: center;
+            overflow: hidden;
+            border: 2px solid rgba(0, 255, 255, 0.5);
+            box-shadow: 0 0 15px rgba(0, 255, 255, 0.5), 0 0 30px rgba(0, 255, 255, 0.3);
         }
 
         h2 {
-            color: #333;
+            font-size: 2.5rem;
+            margin-bottom: 20px;
+            color: #fff;
+            text-shadow: 0 0 5px rgba(255, 255, 255, 0.5), 0 0 10px rgba(255, 255, 255, 0.3);
+        }
+
+        h3 {
+            font-size: 1.5rem;
+            margin-bottom: 15px;
+            color: #fff;
+            text-shadow: 0 0 5px rgba(255, 255, 255, 0.5), 0 0 10px rgba(255, 255, 255, 0.3);
         }
 
         #booking-form {
-            margin-bottom: 20px;
+            margin-bottom: 30px;
+        }
+
+        label {
+            display: block;
+            font-size: 1rem;
+            margin-bottom: 8px;
+            font-weight: 500;
+            color: #fff;
         }
 
         input,
+        select,
         button {
-            padding: 10px;
-            margin: 5px;
-            width: 80%;
-            border-radius: 5px;
-            border: 1px solid #ccc;
+            width: 100%;
+            padding: 12px;
+            margin-bottom: 15px;
+            border-radius: 6px;
+            border: 2px solid rgba(0, 255, 255, 0.5);
+            background-color: rgba(255, 255, 255, 0.1);
+            font-size: 1rem;
+            color: #fff;
+            outline: none;
+            transition: all 0.3s ease;
+            box-shadow: 0 0 10px rgba(0, 255, 255, 0.3);
+        }
+
+        input:focus,
+        select:focus {
+            border-color: rgba(0, 255, 255, 0.8);
+            background-color: rgba(255, 255, 255, 0.2);
+            box-shadow: 0 0 15px rgba(0, 255, 255, 0.5);
         }
 
         button {
-            background-color: #28a745;
-            color: white;
+            background-color: rgba(0, 255, 255, 0.2);
+            color: #fff;
+            font-size: 1.1rem;
             cursor: pointer;
+            transition: background-color 0.3s, transform 0.2s, box-shadow 0.3s ease;
+            box-shadow: 0 0 10px rgba(0, 255, 255, 0.3);
         }
 
         button:hover {
-            background-color: #218838;
+            background-color: rgba(0, 255, 255, 0.5);
+            transform: scale(1.05);
+            box-shadow: 0 0 15px rgba(0, 255, 255, 0.5), 0 0 30px rgba(0, 255, 255, 0.3);
         }
 
-        .slot {
-            padding: 10px;
-            border: 1px solid #ccc;
-            margin: 5px;
-            border-radius: 5px;
-            text-align: center;
-            cursor: pointer;
-            transition: background 0.3s;
+        button:focus {
+            outline: none;
+            box-shadow: 0 0 15px rgba(0, 255, 255, 0.5), 0 0 30px rgba(0, 255, 255, 0.3);
         }
 
-        .booked {
-            background-color: #f8d7da;
-            color: #721c24;
-            cursor: not-allowed;
-        }
-
-        .available {
-            background-color: #d4edda;
-            color: #155724;
-        }
-
-        .processing {
-            background-color: #fff3cd;
-            color: #856404;
-        }
-
-        #queue,
-        #logs {
-            margin-top: 20px;
-            padding: 10px;
-            background: #fff;
-            border: 1px solid #ccc;
-            border-radius: 5px;
-            box-shadow: 0px 0px 10px rgba(0, 0, 0, 0.1);
+        .queue-item {
+            background-color: rgba(255, 255, 255, 0.1);
+            padding: 15px;
+            margin-bottom: 10px;
+            border-radius: 8px;
+            box-shadow: 0 0 10px rgba(0, 255, 255, 0.3);
             text-align: left;
+            border: 2px solid rgba(0, 255, 255, 0.5);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
         }
 
-        p {
+        .queue-item:hover {
+            transform: scale(1.05);
+            box-shadow: 0 0 15px rgba(0, 255, 255, 0.5), 0 0 30px rgba(0, 255, 255, 0.3);
+        }
+
+        .queue-item p {
             margin: 5px 0;
+            font-size: 1rem;
+            color: #fff;
+        }
+
+        .queue-item p strong {
+            font-weight: 600;
+        }
+
+        select {
+            width: 100%;
+            padding: 12px;
+            margin-bottom: 15px;
+            border-radius: 6px;
+            border: 2px solid rgba(0, 255, 255, 0.5);
+            background-color: rgba(255, 255, 255, 0.1);
+            font-size: 1rem;
+            color: #fff;
+            outline: none;
+            transition: all 0.3s ease;
+            box-shadow: 0 0 10px rgba(0, 255, 255, 0.3);
+            appearance: none; /* Removes default dropdown arrow */
+            background-image: linear-gradient(135deg, rgba(0, 255, 255, 0.5), rgba(0, 255, 255, 0.2));
+            background-clip: padding-box;
+        }
+
+        select:focus {
+            border-color: rgba(0, 255, 255, 0.8);
+            background-color: rgba(255, 255, 255, 0.2);
+            box-shadow: 0 0 15px rgba(0, 255, 255, 0.5);
+        }
+
+        select option {
+            background-color: rgba(0, 0, 0, 0.8);
+            color: #fff;
         }
     </style>
 </head>
@@ -99,125 +163,101 @@
         <form id="booking-form">
             <label for="name">Enter Name:</label>
             <input type="text" id="name" required placeholder="Your Name">
+
+            <label for="room">Select Room:</label>
+            <select id="room" required>
+                <option value="" disabled selected>Select a room</option>
+            </select>
+
             <button type="submit">Book Slot</button>
         </form>
 
-        <h3>Available Rooms</h3>
-        <div id="rooms"></div>
-
-        <h3>Process Queue (Round-Robin Scheduling)</h3>
-        <div id="queue">Queue: None</div>
-
-        <h3>Logs</h3>
-        <div id="logs">Logs will appear here...</div>
+        <h3>Process Queue</h3>
+        <div id="queue-container">
+            <p>Loading queue...</p>
+        </div>
     </div>
 
     <script>
-        const API_URL = 'http://192.168.56.1:8000/api/rooms/';
-        const BOOKING_URL = 'http://192.168.56.1:8000/api/bookings/create/';
-        let queue = [];
-        let processing = false;
-        const TIME_SLICE = 2000; // Round-Robin Time Slice (2 seconds)
-        let semaphore = 1; // Binary Semaphore (1 = available, 0 = locked)
+        const API_URL = 'http://127.0.0.1:8000//api/rooms/';
+        const BOOKING_URL = 'http://127.0.0.1:8000//api/bookings/create/';
+        const QUEUE_URL = 'http://127.0.0.1:8000//api/show_queue/';
 
         async function fetchRooms() {
             try {
                 const response = await fetch(API_URL);
                 if (!response.ok) throw new Error('Failed to fetch rooms');
                 const rooms = await response.json();
-                displayRooms(rooms);
+                populateRoomDropdown(rooms);
             } catch (error) {
-                updateLogs(`Error: ${error.message}`);
+                console.log(error);
             }
         }
 
-        function displayRooms(rooms) {
-            const container = document.getElementById('rooms');
-            container.innerHTML = '';
+        function populateRoomDropdown(rooms) {
+            const roomDropdown = document.getElementById('room');
+            roomDropdown.innerHTML = '<option value="" disabled selected>Select a room</option>';
 
             rooms.forEach(room => {
-                const div = document.createElement('div');
-                div.classList.add('slot', room.available_slots > 0 ? 'available' : 'booked');
-                div.textContent = `${room.name} - Slots: ${room.available_slots}`;
+                const option = document.createElement('option');
+                option.value = room.id;
+                option.textContent = `${room.name} - Slots: ${room.available_slots}`;
+                roomDropdown.appendChild(option);
+            });
+        }
 
-                if (room.available_slots > 0) {
-                    div.onclick = () => addToQueue(room.id);
-                }
+        async function loadQueue() {
+            const res = await fetch(QUEUE_URL);
+            const data = await res.json();
+            const queueContainer = document.getElementById('queue-container');
+            queueContainer.innerHTML = '';
 
-                container.appendChild(div);
+            if (data.queued.length === 0) {
+                queueContainer.innerHTML = '<p class="text-gray-500">Queue is empty.</p>';
+                return;
+            }
+
+            data.queued.forEach((process, index) => {
+                const queueItem = document.createElement('div');
+                queueItem.classList.add('queue-item');
+                queueItem.innerHTML = `
+                    <p><strong>Process #${index + 1}:</strong> ${process.name}</p>
+                    <p><strong>User:</strong> ${process.user_name || 'N/A'}</p>
+                    <p><strong>Room ID:</strong> ${process.room_id || 'N/A'}</p>
+                    <p class="text-sm text-gray-600">Status: ${process.status}</p>
+                `;
+                queueContainer.appendChild(queueItem);
             });
         }
 
         document.getElementById('booking-form').addEventListener('submit', function (event) {
             event.preventDefault();
             const name = document.getElementById('name').value.trim();
-            if (!name) {
-                alert('Please enter your name');
+            const roomId = document.getElementById('room').value;
+
+            if (!name || !roomId) {
+                alert('Please enter your name and select a room.');
                 return;
             }
-            updateLogs(`User ${name} is ready to book.`);
+
+            fetch(BOOKING_URL, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ user_name: name, room_id: roomId })
+            }).then(res => res.json())
+                .then(data => {
+                    console.log('Booking submitted', data);
+                    loadQueue(); // Refresh the queue after submission
+                });
         });
 
-        function addToQueue(roomId) {
-            const name = document.getElementById('name').value.trim();
-            if (!name) {
-                alert('Please enter your name first.');
-                return;
-            }
+        // Load queue initially and refresh every 5 seconds
+        loadQueue();
+        setInterval(loadQueue, 5000);
 
-            queue.push({ roomId, name });
-            updateQueueDisplay();
-            processQueue();
-        }
-
-        function updateQueueDisplay() {
-            document.getElementById('queue').textContent = `Queue: ${queue.map(q => q.name).join(', ') || 'None'}`;
-        }
-
-        async function processQueue() {
-            if (processing || queue.length === 0) return;
-            if (semaphore === 0) {
-                updateLogs("System is busy... waiting");
-                setTimeout(processQueue, TIME_SLICE);
-                return;
-            }
-
-            semaphore = 0; // Lock the resource
-            processing = true;
-
-            const { roomId, name } = queue.shift();
-            updateQueueDisplay();
-            updateLogs(`Processing booking for ${name}...`);
-
-            setTimeout(async () => {
-                try {
-                    const response = await fetch(BOOKING_URL, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ room_id: roomId, user_name: name })
-                    });
-
-                    if (!response.ok) throw new Error('Booking failed');
-                    updateLogs(`✅ Booking confirmed for ${name}.`);
-                } catch (error) {
-                    updateLogs(`❌ Error processing ${name}: ${error.message}`);
-                }
-
-                semaphore = 1; // Release the resource
-                processing = false;
-                fetchRooms();
-                processQueue();
-            }, TIME_SLICE);
-        }
-
-        function updateLogs(message) {
-            const logsContainer = document.getElementById('logs');
-            const logEntry = document.createElement('p');
-            logEntry.innerHTML = `<strong>${new Date().toLocaleTimeString()}:</strong> ${message}`;
-            logsContainer.appendChild(logEntry);
-        }
-
-        setInterval(fetchRooms, 5000);
+        // Fetch rooms on load
         fetchRooms();
     </script>
 </body>

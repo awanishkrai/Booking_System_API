@@ -1,5 +1,6 @@
 import threading
 import queue
+import time
 from datetime import datetime
 from rest_framework import status
 from rest_framework.response import Response
@@ -9,14 +10,13 @@ from .models import Room, Booking
 from .serializers import RoomSerializer, BookingSerializer
 from django.db import transaction, IntegrityError
 
-# OS Simulation Components
+# Queues and Concurrency Primitives
 process_queue = queue.Queue()
 processes = {}
 mutex = threading.Lock()
-semaphore = threading.Semaphore(2)  # Max 2 processes in critical section
-pid_counter = 1
 semaphore_lock = threading.Lock()
 room_semaphores = {}
+pid_counter = 1
 
 def generate_pid():
     global pid_counter
@@ -27,10 +27,13 @@ def generate_pid():
 def fcfs_scheduling():
     try:
         if not process_queue.empty():
-            process = process_queue.get_nowait()  # Use get_nowait to avoid blocking
-            process["status"] = "Completed"
+            process = process_queue.get_nowait()
+            process["status"] = "Processing"
+            processes[process["pid"]]["status"] = "Processing"
             return process
-    except queue.Empty:
+        return None
+    except Exception as e:
+        print(f"Error in FCFS scheduling: {e}")
         return None
 
 @api_view(['GET'])
@@ -67,49 +70,21 @@ def list_processes(request):
 
 @api_view(['POST'])
 def make_booking(request):
-    room_id = request.data.get('room_id')
     user_name = request.data.get('user_name')
-    semaphore_acquired = False
+    room_id = request.data.get('room_id')
+    pid = generate_pid()
 
-    try:
-        with semaphore_lock:
-            if room_id not in room_semaphores:
-                room = Room.objects.get(id=room_id)
-                room_semaphores[room_id] = threading.Semaphore(room.available_slots)
+    process = {
+        "pid": pid,
+        "name": f"Booking-{user_name}",
+        "room_id": room_id,
+        "user_name": user_name,
+        "status": "Queued"
+    }
+    processes[pid] = process
+    process_queue.put(process)
 
-        with transaction.atomic():
-            room = Room.objects.select_for_update().get(id=room_id)
-
-            if room.available_slots <= 0:
-                return Response({"error": "Room is fully booked"}, status=status.HTTP_400_BAD_REQUEST)
-
-            if not room_semaphores[room_id].acquire(blocking=False):
-                return Response({"error": "No slots available, please try again later."}, status=status.HTTP_429_TOO_MANY_REQUESTS)
-            
-            semaphore_acquired = True
-
-            booking = Booking.objects.create(room=room, user_name=user_name)
-            room.available_slots -= 1
-            room.save()
-
-            return Response({
-                "message": "Booking successful",
-                "room": room.name,
-                "user_name": user_name
-            }, status=status.HTTP_201_CREATED)
-
-    except Room.DoesNotExist:
-        return Response({"error": "Room not found"}, status=status.HTTP_404_NOT_FOUND)
-
-    except IntegrityError:
-        return Response({"error": "Database integrity error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-    except Exception as e:
-        return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-    finally:
-        if semaphore_acquired and room_id in room_semaphores:
-            room_semaphores[room_id].release()
+    return Response({"message": "Booking request queued", "process": process}, status=status.HTTP_202_ACCEPTED)
 
 @api_view(['GET'])
 def schedule_process_fcfs(request):
@@ -117,3 +92,67 @@ def schedule_process_fcfs(request):
     if process:
         return Response({"message": "FCFS executed", "process": process})
     return Response({"error": "No processes in queue"}, status=status.HTTP_400_BAD_REQUEST)
+
+
+def booking_worker():
+    while True:
+        process = fcfs_scheduling()
+        if not process:
+            time.sleep(1)
+            continue
+
+        pid = process["pid"]
+        room_id = process.get("room_id")
+        user_name = process.get("user_name")
+        semaphore_acquired = False
+
+        try:
+            with semaphore_lock:
+                if room_id not in room_semaphores:
+                    room = Room.objects.get(id=room_id)
+                    room_semaphores[room_id] = threading.Semaphore(room.available_slots)
+
+            with transaction.atomic():
+                room = Room.objects.select_for_update().get(id=room_id)
+
+                if room.available_slots <= 0:
+                    processes[pid]["status"] = "Failed - Room Full"
+                    continue
+
+                if not room_semaphores[room_id].acquire(blocking=False):
+                    processes[pid]["status"] = "Failed - No Slot Available"
+                    continue
+
+                semaphore_acquired = True
+
+                Booking.objects.create(room=room, user_name=user_name)
+                room.available_slots -= 1
+                room.save()
+                processes[pid]["status"] = "Completed"
+
+        except Room.DoesNotExist:
+            processes[pid]["status"] = "Failed - Room Not Found"
+        except Exception as e:
+            processes[pid]["status"] = f"Failed - {str(e)}"
+        finally:
+            if semaphore_acquired and room_id in room_semaphores:
+                room_semaphores[room_id].release()
+
+@api_view(['GET'])
+def show_queue(request):
+    queue_data = [process for process in processes.values()]
+    return Response({"queued": queue_data})
+
+# Start the background worker thread
+threading.Thread(target=booking_worker, daemon=True).start()
+
+# Define your URL patterns
+urlpatterns = [
+    path('rooms/', room_list, name='room_list'),
+    path('rooms/<int:room_id>/bookings/', booking_list, name='booking_list'),
+    path('processes/create/', create_process, name='create_process'),
+    path('processes/', list_processes, name='list_processes'),
+    path('booking/create/', make_booking, name='make_booking'),
+    path('process/schedule/', schedule_process_fcfs, name='schedule_process_fcfs'),
+    path('queue/', show_queue, name='show_queue'),
+]
