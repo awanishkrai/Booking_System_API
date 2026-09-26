@@ -1,16 +1,11 @@
 from django.urls import path
+from rest_framework.authtoken.views import obtain_auth_token
 from . import views
-from .views import show_queue
 
-
-
-# URL patterns
 urlpatterns = [
-    path('rooms/', views.room_list, name='room_list'),
-    path('bookings/<int:room_id>/', views.booking_list, name='booking_list'),
-    path('processes/create/', views.create_process, name='create_process'),
-    path('processes/', views.list_processes, name='list_processes'),
-    path('bookings/create/', views.make_booking, name='make_booking'),
-    path('scheduler/fcfs/', views.schedule_process_fcfs, name='schedule_process_fcfs'),
-    path('show_queue/', views.show_queue, name='show_queue'),
+    path('login/', obtain_auth_token, name='api_login'),
+    path('register/', views.register, name='api_register'),
+    path('book',views.book_room,name='book_room'),
+    path('list',views.listRooms,name='listRooms'),
+    path('cancel',views.cancelBooking,name='cancelBooking'),
 ]
