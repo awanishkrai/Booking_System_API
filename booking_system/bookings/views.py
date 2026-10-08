@@ -1,123 +1,230 @@
-from django.contrib.auth.models import User
-from django.db import IntegrityError
+import logging
+
+from django.contrib.auth import get_user_model
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import transaction
+from django.db.models import F
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
-from .models import Room, Booking
-from django.db import transaction
-from django.core.cache import cache
+
+from .models import Room, Booking, BookingStatus
+from .serializers import (
+    RegisterSerializer,
+    RoomSerializer,
+    BookingSerializer,
+    BookingCreateSerializer,
+    CancelBookingSerializer,
+)
+
+User = get_user_model()
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _ok(data=None, message='', status_code=status.HTTP_200_OK):
+    payload = {'success': True, 'message': message}
+    if data is not None:
+        payload['data'] = data
+    return Response(payload, status=status_code)
+
+
+def _err(message, status_code=status.HTTP_400_BAD_REQUEST):
+    return Response({'success': False, 'message': message}, status=status_code)
+
+
+# ---------------------------------------------------------------------------
+# Auth endpoints
+# ---------------------------------------------------------------------------
+
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def register(request):
-    username = request.data.get('username')
-    email = request.data.get('email')
-    password = request.data.get('password')
+    """Create a new user account."""
+    serializer = RegisterSerializer(data=request.data)
+    if not serializer.is_valid():
+        return _err(serializer.errors, status.HTTP_400_BAD_REQUEST)
 
-    if not username or not password:
-        return Response(
-            {"message": "username and password are required"},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
+    # Run Django's password validators explicitly
+    try:
+        validate_password(serializer.validated_data['password'])
+    except DjangoValidationError as exc:
+        return _err({'password': list(exc.messages)}, status.HTTP_400_BAD_REQUEST)
+
+    serializer.save()
+    logger.info('New user registered: %s', serializer.validated_data['username'])
+    return _ok(message='User created successfully.', status_code=status.HTTP_201_CREATED)
+
+
+# ---------------------------------------------------------------------------
+# Room endpoints
+# ---------------------------------------------------------------------------
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def list_rooms(request):
+    """List all rooms with current slot availability."""
+    rooms = Room.objects.all()
+    return _ok(data=RoomSerializer(rooms, many=True).data)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_room(request, room_id):
+    """Retrieve a single room by ID."""
+    try:
+        room = Room.objects.get(pk=room_id)
+    except Room.DoesNotExist:
+        return _err('Room not found.', status.HTTP_404_NOT_FOUND)
+    return _ok(data=RoomSerializer(room).data)
+
+
+# ---------------------------------------------------------------------------
+# Booking endpoints
+# ---------------------------------------------------------------------------
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def book_room(request):
+    """
+    Create a booking for the authenticated user.
+
+    Idempotency:
+    * The client supplies an ``idempotency_key`` (UUID).
+    * If the key has already been seen AND the booking was successfully
+      created, we return the original response.
+    * If the booking attempt failed we do NOT mark the key as consumed,
+      so the client can safely retry.
+    """
+    serializer = BookingCreateSerializer(data=request.data)
+    if not serializer.is_valid():
+        return _err(serializer.errors)
+
+    idempotency_key = serializer.validated_data['idempotency_key']
+    user = request.user
+    room: Room = serializer.validated_data['room']
+
+    # --- Idempotency: check whether this key was already committed ----------
+    existing = Booking.objects.filter(idempotency_key=idempotency_key).first()
+    if existing:
+        if existing.status == BookingStatus.CONFIRMED:
+            logger.info('Idempotent booking replay key=%s user=%s', idempotency_key, user)
+            return _ok(
+                data=BookingSerializer(existing).data,
+                message='Booking already confirmed (idempotent replay).',
+            )
+        # If previous attempt was cancelled, let it through as a new booking
+        # with the same key (edge case: caller reuses keys).
+
+    # --- Duplicate active booking check -------------------------------------
+    if Booking.objects.filter(
+        room=room, user=user, status=BookingStatus.CONFIRMED
+    ).exists():
+        return _err('You already have an active booking for this room.')
+
+    # --- Atomic slot decrement + booking creation ---------------------------
+    try:
+        with transaction.atomic():
+            # Lock BOTH the room row and verify availability inside transaction
+            locked_room = Room.objects.select_for_update().get(pk=room.pk)
+            if locked_room.available_slots <= 0:
+                return _err('Room is fully booked.', status.HTTP_409_CONFLICT)
+
+            # Atomic in-place decrement — avoids stale read race condition
+            Room.objects.filter(pk=room.pk).update(
+                available_slots=F('available_slots') - 1
+            )
+
+            booking = Booking.objects.create(
+                room=locked_room,
+                user=user,
+                idempotency_key=idempotency_key,
+                status=BookingStatus.CONFIRMED,
+                date=serializer.validated_data.get('date'),
+                start_time=serializer.validated_data.get('start_time'),
+                end_time=serializer.validated_data.get('end_time'),
+            )
+
+    except Exception:
+        logger.exception('Booking creation failed for user=%s room=%s', user, room.pk)
+        return _err('Booking failed due to a server error. Please retry.', status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    logger.info('Booking created id=%s user=%s room=%s', booking.pk, user, room.pk)
+    return _ok(
+        data=BookingSerializer(booking).data,
+        message='Room booked successfully.',
+        status_code=status.HTTP_201_CREATED,
+    )
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def cancel_booking(request):
+    """
+    Soft-cancel an existing booking by idempotency_key.
+
+    The ``Booking`` row is NOT deleted — its status is set to CANCELLED
+    and available_slots is restored atomically via F()-expression to
+    prevent lost-update race conditions.
+    """
+    serializer = CancelBookingSerializer(data=request.data)
+    if not serializer.is_valid():
+        return _err(serializer.errors)
+
+    idempotency_key = serializer.validated_data['idempotency_key']
+    user = request.user
 
     try:
-        user = User.objects.create_user(
-            username=username,
-            email=email,
-            password=password,
-        )
-    except IntegrityError:
-        return Response(
-            {"message": "username already exists"},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
-
-    return Response(
-        {"message": "user created successfully"},
-        status=status.HTTP_201_CREATED,
-    )
-@api_view(['POST'])
-def book_room(request):
-    room_id=request.data.get('room_id')
-    user=request.user
-    idempotency_key=request.data.get('idempotency_key')
-    cache_key=f"idempotancy:{idempotency_key}"
-    
-    is_key= cache.add(cache_key,True,timeout=300)
-    if(is_key):
-        try:
-            with transaction.atomic():
-                room=Room.objects.select_for_update().get(id=room_id)
-                booking=Booking.objects.filter(room=room,user=user).first()
-                if(booking):
-                    return Response(
-                        {"message": "you have already booked this room"},
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
-                if(room.available_slots>0):
-                    room.available_slots-=1
-                    room.save()
-                    Booking.objects.create(room=room,user=user,idempotency_key=idempotency_key)
-                    return Response(
-                        {"message": "room booked successfully"},
-                        status=status.HTTP_200_OK,
-                    )
-                else:
-                    return Response(
-                        {"message": "room is not available"},
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
-        except Exception as e:
-            return Response(
-                {"message": str(e)},
-                status=status.HTTP_400_BAD_REQUEST,
-            ) 
-    else:
-        return Response(
-            {"message": "request already processed"},
-            status=status.HTTP_400_BAD_REQUEST,
-        )  
-    
-    
-@api_view(['GET'])
-def listRooms(request):
-    rooms=Room.objects.all()
-    roomlist=[]
-    for room in rooms:
-        roomlist.append({
-            "id": room.id,
-            "name": room.name,
-            "capacity": room.capacity,
-            "available_slots": room.available_slots,
-        })
-    return Response(
-        {"data": roomlist},
-        status=status.HTTP_200_OK,
-    )    
-
-@api_view(['POST'])
-def cancelBooking(request):
-    idempotency_key=request.data.get("idempotency_key")
-    user=request.user
-    cancle_cache_key=f"cancle_idempotancy:{idempotency_key}"
-    is_key=cache.add(cancle_cache_key,True,timeout=300)
-    if(is_key):
-        try:
-            with transaction.atomic():
-                booking=Booking.objects.select_for_update().get(idempotency_key=idempotency_key,user=user)
-                booking.room.available_slots+=1
-                booking.room.save()
-                booking.delete()
-                return Response(
-                    {"message": "booking cancelled successfully"},
-                    status=status.HTTP_200_OK,
-                )
-        except Exception as e:
-            return Response(
-                {"message": str(e)},
-                status=status.HTTP_400_BAD_REQUEST,
+        with transaction.atomic():
+            # Lock the booking row
+            booking = Booking.objects.select_for_update().get(
+                idempotency_key=idempotency_key,
+                user=user,
             )
-    
 
-    
-    
+            if booking.status == BookingStatus.CANCELLED:
+                return _ok(message='Booking is already cancelled.')
+
+            # Atomically restore the slot without reading the current value
+            Room.objects.filter(pk=booking.room_id).update(
+                available_slots=F('available_slots') + 1
+            )
+
+            booking.status = BookingStatus.CANCELLED
+            booking.save(update_fields=['status', 'updated_at'])
+
+    except Booking.DoesNotExist:
+        return _err('Booking not found.', status.HTTP_404_NOT_FOUND)
+    except Exception:
+        logger.exception('Cancel failed for user=%s key=%s', user, idempotency_key)
+        return _err('Cancellation failed due to a server error. Please retry.', status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    logger.info('Booking cancelled id=%s user=%s', booking.pk, user)
+    return _ok(data=BookingSerializer(booking).data, message='Booking cancelled successfully.')
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def my_bookings(request):
+    """List all bookings (active and cancelled) for the authenticated user."""
+    bookings = Booking.objects.filter(user=request.user).select_related('room')
+    return _ok(data=BookingSerializer(bookings, many=True).data)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def room_bookings(request, room_id):
+    """List all CONFIRMED bookings for a specific room."""
+    try:
+        room = Room.objects.get(pk=room_id)
+    except Room.DoesNotExist:
+        return _err('Room not found.', status.HTTP_404_NOT_FOUND)
+
+    bookings = Booking.objects.filter(
+        room=room, status=BookingStatus.CONFIRMED
+    ).select_related('user')
+    return _ok(data=BookingSerializer(bookings, many=True).data)
