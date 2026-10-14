@@ -44,21 +44,21 @@ class RoomSerializer(serializers.ModelSerializer):
 # ---------------------------------------------------------------------------
 
 class BookingSerializer(serializers.ModelSerializer):
-    """Read serializer — safe to return to the client."""
+    """Read serializer â€” safe to return to the client."""
     user = serializers.StringRelatedField()
     room = RoomSerializer(read_only=True)
 
     class Meta:
         model = Booking
         fields = [
-            'id', 'room', 'user', 'status',
+            'id', 'room', 'user', 'status', 'idempotency_key',
             'date', 'start_time', 'end_time',
             'booking_time', 'updated_at',
         ]
 
 
 class BookingCreateSerializer(serializers.Serializer):
-    """Write serializer — validates booking creation input."""
+    """Write serializer â€” validates booking creation input."""
 
     room_id = serializers.PrimaryKeyRelatedField(
         queryset=Room.objects.all(), source='room'
@@ -82,5 +82,5 @@ class BookingCreateSerializer(serializers.Serializer):
 
 
 class CancelBookingSerializer(serializers.Serializer):
-    """Write serializer — validates booking cancellation input."""
+    """Write serializer â€” validates booking cancellation input."""
     idempotency_key = serializers.UUIDField()

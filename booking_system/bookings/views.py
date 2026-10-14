@@ -134,7 +134,7 @@ def book_room(request):
             if locked_room.available_slots <= 0:
                 return _err('Room is fully booked.', status.HTTP_409_CONFLICT)
 
-            # Atomic in-place decrement — avoids stale read race condition
+            # Atomic in-place decrement â€” avoids stale read race condition
             Room.objects.filter(pk=room.pk).update(
                 available_slots=F('available_slots') - 1
             )
@@ -167,7 +167,7 @@ def cancel_booking(request):
     """
     Soft-cancel an existing booking by idempotency_key.
 
-    The ``Booking`` row is NOT deleted — its status is set to CANCELLED
+    The ``Booking`` row is NOT deleted â€” its status is set to CANCELLED
     and available_slots is restored atomically via F()-expression to
     prevent lost-update race conditions.
     """
@@ -175,16 +175,20 @@ def cancel_booking(request):
     if not serializer.is_valid():
         return _err(serializer.errors)
 
-    idempotency_key = serializer.validated_data['idempotency_key']
+    idempotency_key = serializer.validated_data.get('idempotency_key')
+    booking_id = serializer.validated_data.get('booking_id')
     user = request.user
 
     try:
         with transaction.atomic():
             # Lock the booking row
-            booking = Booking.objects.select_for_update().get(
-                idempotency_key=idempotency_key,
-                user=user,
-            )
+            filter_kwargs = {'user': user}
+            if idempotency_key:
+                filter_kwargs['idempotency_key'] = idempotency_key
+            else:
+                filter_kwargs['pk'] = booking_id
+
+            booking = Booking.objects.select_for_update().get(**filter_kwargs)
 
             if booking.status == BookingStatus.CANCELLED:
                 return _ok(message='Booking is already cancelled.')
